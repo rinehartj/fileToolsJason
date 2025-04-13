@@ -4,29 +4,37 @@ from PIL import Image, ExifTags, ImageTk
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 from send2trash import send2trash
+import cv2
 
 USE_DATE_TAKEN = True
 USE_FILE_SIZE = True
 
 def get_date_taken(path):
     try:
-        img = Image.open(path)
-        exif = img._getexif()
-        if not exif:
-            return None
-        for tag, value in exif.items():
-            if ExifTags.TAGS.get(tag) == "DateTimeOriginal":
-                return value
+        ext = os.path.splitext(path)[1].lower()
+        if ext in {".jpg", ".jpeg", ".png", ".tiff"}:
+            img = Image.open(path)
+            exif = img._getexif()
+            if not exif:
+                return None
+            for tag, value in exif.items():
+                if ExifTags.TAGS.get(tag) == "DateTimeOriginal":
+                    return value
+        else:
+            # Use last modified time as fallback
+            return str(os.path.getmtime(path))
     except Exception:
         return None
-    return None
 
-def get_image_files(folder):
-    supported = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff"}
+def get_media_files(folder):
+    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff"}
+    video_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv"}
+
     files = []
     for root, _, filenames in os.walk(folder):
         for fname in filenames:
-            if os.path.splitext(fname)[1].lower() in supported:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in image_exts or ext in video_exts:
                 files.append(os.path.join(root, fname))
     return files
 
@@ -117,8 +125,8 @@ class DuplicateFinderApp:
         self.duplicates.clear()
         self.delete_flags.clear()
 
-        files1 = get_image_files(self.folder1)
-        files2 = get_image_files(self.folder2)
+        files1 = get_media_files(self.folder1)
+        files2 = get_media_files(self.folder2)
 
         info_map2 = {}
         for path in files2:
@@ -214,11 +222,25 @@ class DuplicateFinderApp:
 
     def load_preview(self, path):
         try:
-            img = Image.open(path)
-            img.thumbnail((250, 250))
-            return ImageTk.PhotoImage(img)
-        except Exception:
+            ext = os.path.splitext(path)[1].lower()
+            if ext in {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff"}:
+                img = Image.open(path)
+                img.thumbnail((250, 250))
+                return ImageTk.PhotoImage(img)
+            elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv"}:
+                cap = cv2.VideoCapture(path)
+                success, frame = cap.read()
+                cap.release()
+                if success:
+                    # Convert BGR to RGB and then to PIL
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame)
+                    img.thumbnail((250, 250))
+                    return ImageTk.PhotoImage(img)
+        except Exception as e:
+            print(f"Preview load error: {e}")
             return None
+
 
 if __name__ == "__main__":
     root = tk.Tk()
