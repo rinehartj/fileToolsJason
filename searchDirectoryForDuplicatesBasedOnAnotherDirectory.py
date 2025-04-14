@@ -9,6 +9,10 @@ import cv2
 USE_DATE_TAKEN = True
 USE_FILE_SIZE = True
 
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv"}
+
+
 def get_date_taken(path):
     try:
         ext = os.path.splitext(path)[1].lower()
@@ -38,10 +42,18 @@ def get_media_files(folder):
                 files.append(os.path.join(root, fname))
     return files
 
+
 def get_file_info(path):
     size = os.path.getsize(path)
-    date_taken = get_date_taken(path) if USE_DATE_TAKEN else None
-    return (size, date_taken)
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext in VIDEO_EXTS:
+        return (size,)  # Only use file size for video
+    elif ext in IMAGE_EXTS:
+        date_taken = get_date_taken(path) if USE_DATE_TAKEN else None
+        return (size, date_taken)
+    else:
+        return (size,)  # Fallback for unknown types
 
 class DuplicateFinderApp:
     def __init__(self, root):
@@ -137,16 +149,17 @@ class DuplicateFinderApp:
             info = get_file_info(f1)
             if info in info_map2:
                 for f2 in info_map2[info]:
-                    # Skip if it's the same file (or Folder2 inside Folder1 and pointing to same file)
                     try:
                         if os.path.samefile(f1, f2):
                             continue
                     except Exception:
-                        pass  # on Windows, samefile may fail on different drives
+                        pass
 
-                    self.duplicates.append((f1, f2, info[1], info[0]))
+                    date = info[1] if len(info) > 1 else ""
+                    size = info[0]
+                    self.duplicates.append((f1, f2, date, size))
                     iid = f"{f1}|{f2}"
-                    self.tree.insert("", tk.END, iid=iid, values=(f1, f2, info[1], info[0], "", ""))
+                    self.tree.insert("", tk.END, iid=iid, values=(f1, f2, date, size, "", ""))
                     self.delete_flags[iid] = [False, False]
 
         self.tree.bind("<ButtonRelease-1>", self.on_checkbox_click)

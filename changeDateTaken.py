@@ -30,7 +30,12 @@ def add_date_taken(file_path, date_taken):
         img = Image.open(file_path)
 
         # Get existing EXIF data or create new EXIF data
-        exif_data = piexif.load(img.info.get("exif", b""))
+        exif_bytes = img.info.get("exif")
+        if exif_bytes:
+            exif_data = piexif.load(exif_bytes)
+        else:
+            # Start fresh if no EXIF data exists
+            exif_data = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
 
         # Set the DateTimeOriginal and DateTimeDigitized tags
         exif_data["Exif"][piexif.ExifIFD.DateTimeOriginal] = date_taken.encode("utf-8")
