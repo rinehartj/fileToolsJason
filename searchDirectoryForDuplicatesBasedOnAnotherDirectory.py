@@ -5,6 +5,7 @@ from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 from send2trash import send2trash
 import cv2
+import difPy
 
 USE_DATE_TAKEN = True
 USE_FILE_SIZE = True
@@ -29,6 +30,7 @@ def get_date_taken(path):
             return str(os.path.getmtime(path))
     except Exception:
         return None
+
 
 def get_media_files(folder):
     image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff"}
@@ -55,6 +57,7 @@ def get_file_info(path):
     else:
         return (size,)  # Fallback for unknown types
 
+
 class DuplicateFinderApp:
     def __init__(self, root):
         self.root = root
@@ -79,6 +82,14 @@ class DuplicateFinderApp:
         self.batch_button = tk.Button(top, text="Run Batch Mode", command=self.batch_mode)
         self.batch_button.grid(row=0, column=2)
 
+        self.search_mode = tk.StringVar(value="two_folders")
+        mode_frame = tk.Frame(top)
+        mode_frame.grid(row=0, column=3, padx=10)
+        tk.Radiobutton(mode_frame, text="Compare two folders", variable=self.search_mode, value="two_folders").pack(
+            anchor="w")
+        tk.Radiobutton(mode_frame, text="Find duplicates in one folder", variable=self.search_mode,
+                       value="single_folder").pack(anchor="w")
+
         # Preview
         self.preview_frame = tk.Frame(self.root)
         self.preview_frame.grid(row=1, column=0, sticky="ew")
@@ -94,7 +105,8 @@ class DuplicateFinderApp:
         self.tree_frame = tk.Frame(self.root)
         self.tree_frame.grid(row=2, column=0, sticky="nsew")
 
-        self.tree = ttk.Treeview(self.tree_frame, columns=("file1", "file2", "date", "size", "del1", "del2"), show="headings")
+        self.tree = ttk.Treeview(self.tree_frame, columns=("file1", "file2", "date", "size", "del1", "del2"),
+                                 show="headings")
         for col in ["file1", "file2", "date", "size", "del1", "del2"]:
             self.tree.heading(col, text=col)
         self.tree.column("del1", width=100, anchor="center")
@@ -109,8 +121,10 @@ class DuplicateFinderApp:
         self.select_all1 = tk.IntVar()
         self.select_all2 = tk.IntVar()
 
-        tk.Checkbutton(bottom, text="Select All Delete from Folder1", variable=self.select_all1, command=self.toggle_all1).pack(side=tk.LEFT)
-        tk.Checkbutton(bottom, text="Select All Delete from Folder2", variable=self.select_all2, command=self.toggle_all2).pack(side=tk.LEFT)
+        tk.Checkbutton(bottom, text="Select All Delete from Folder1", variable=self.select_all1,
+                       command=self.toggle_all1).pack(side=tk.LEFT)
+        tk.Checkbutton(bottom, text="Select All Delete from Folder2", variable=self.select_all2,
+                       command=self.toggle_all2).pack(side=tk.LEFT)
         tk.Button(bottom, text="Apply Deletions", command=self.apply_deletions).pack(side=tk.RIGHT)
 
         self.folder1 = None
@@ -127,9 +141,15 @@ class DuplicateFinderApp:
         self.folder2_label.config(text=f"Folder2: {self.folder2}")
 
     def batch_mode(self):
-        if not self.folder1 or not self.folder2:
-            messagebox.showwarning("Folders missing", "Please select both folders first.")
-            return
+        if self.search_mode.get() == "two_folders":
+            if not self.folder1 or not self.folder2:
+                messagebox.showwarning("Folders missing", "Please select both folders first.")
+                return
+        else:  # single folder mode
+            if not self.folder1:
+                messagebox.showwarning("Folder missing", "Please select a folder first.")
+                return
+
         threading.Thread(target=self.find_duplicates).start()
 
     def find_duplicates(self):
@@ -137,30 +157,116 @@ class DuplicateFinderApp:
         self.duplicates.clear()
         self.delete_flags.clear()
 
-        files1 = get_media_files(self.folder1)
-        files2 = get_media_files(self.folder2)
+        if self.search_mode.get() == "single_folder":
+            # Single folder mode - find duplicates within one folder
+            dif = difPy.build(self.folder1)
+        else:
+            # Two folder mode - compare between folders
+            dif = difPy.build([self.folder1, self.folder2])
 
-        info_map2 = {}
-        for path in files2:
-            info = get_file_info(path)
-            info_map2.setdefault(info, []).append(path)
+        search = difPy.search(dif)
+        image_duplicates = search.result
 
-        for f1 in files1:
-            info = get_file_info(f1)
-            if info in info_map2:
-                for f2 in info_map2[info]:
-                    try:
-                        if os.path.samefile(f1, f2):
-                            continue
-                    except Exception:
-                        pass
+        # Process duplicates (same as before but without the folder comparison logic)
+        seen_pairs = set()
+        for img1, matches in image_duplicates.items():
+            for match in matches:
+                img2 = match[0]
 
-                    date = info[1] if len(info) > 1 else ""
-                    size = info[0]
-                    self.duplicates.append((f1, f2, date, size))
-                    iid = f"{f1}|{f2}"
-                    self.tree.insert("", tk.END, iid=iid, values=(f1, f2, date, size, "", ""))
+                # Skip if the files are actually the same file
+                try:
+                    if os.path.samefile(img1, img2):
+                        continue
+                except:
+                    pass
+
+                pair_key = tuple(sorted((os.path.abspath(img1), os.path.abspath(img2))))
+                if pair_key not in seen_pairs:
+                    seen_pairs.add(pair_key)
+
+                    # Get file info for both files
+                    size1 = os.path.getsize(img1)
+                    size2 = os.path.getsize(img2)
+                    date1 = get_date_taken(img1)
+                    date2 = get_date_taken(img2)
+
+                    # Format size and date for display
+                    size_str = f"{size1} bytes"
+                    if size1 != size2:
+                        size_str = f"{size1} vs {size2} bytes (DIFFERENT)"
+
+                    date_str = str(date1) if date1 else "N/A"
+                    if date1 != date2:
+                        date_str = f"{date1} vs {date2} (DIFFERENT)"
+
+                    self.duplicates.append((img1, img2, date_str, size_str))
+                    iid = f"{img1}|{img2}"
+                    self.tree.insert("", tk.END, iid=iid, values=(img1, img2, date_str, size_str, "", ""))
                     self.delete_flags[iid] = [False, False]
+
+        # Video duplicate detection remains the same but needs to handle single folder mode
+        if self.search_mode.get() == "single_folder":
+            files = get_media_files(self.folder1)
+            info_map = {}
+            for path in files:
+                ext = os.path.splitext(path)[1].lower()
+                if ext in VIDEO_EXTS:
+                    info = get_file_info(path)
+                    info_map.setdefault(info, []).append(path)
+
+            for info, paths in info_map.items():
+                if len(paths) > 1:  # Only show groups with duplicates
+                    for i in range(len(paths)):
+                        for j in range(i + 1, len(paths)):
+                            f1 = paths[i]
+                            f2 = paths[j]
+                            pair_key = tuple(sorted((os.path.abspath(f1), os.path.abspath(f2))))
+                            if pair_key not in seen_pairs:
+                                seen_pairs.add(pair_key)
+                                date = info[1] if len(info) > 1 else ""
+                                size = info[0]
+                                self.duplicates.append((f1, f2, date, f"{size} bytes"))
+                                iid = f"{f1}|{f2}"
+                                self.tree.insert("", tk.END, iid=iid, values=(f1, f2, date, f"{size} bytes", "", ""))
+                                self.delete_flags[iid] = [False, False]
+        else:
+            # Original two-folder video comparison logic
+            files1 = get_media_files(self.folder1)
+            files2 = get_media_files(self.folder2)
+            info_map2 = {}
+            for path in files2:
+                ext = os.path.splitext(path)[1].lower()
+                if ext in VIDEO_EXTS:
+                    info = get_file_info(path)
+                    info_map2.setdefault(info, []).append(path)
+
+            for f1 in files1:
+                ext = os.path.splitext(f1)[1].lower()
+                if ext in VIDEO_EXTS:
+                    info = get_file_info(f1)
+                    if info in info_map2:
+                        for f2 in info_map2[info]:
+                            try:
+                                if os.path.samefile(f1, f2):
+                                    continue
+                            except Exception:
+                                pass
+
+                            pair_key = tuple(sorted((os.path.abspath(f1), os.path.abspath(f2))))
+                            if pair_key not in seen_pairs:
+                                seen_pairs.add(pair_key)
+                                date = info[1] if len(info) > 1 else ""
+                                size = info[0]
+                                self.duplicates.append((f1, f2, date, f"{size} bytes"))
+                                iid = f"{f1}|{f2}"
+                                self.tree.insert("", tk.END, iid=iid, values=(f1, f2, date, f"{size} bytes", "", ""))
+                                self.delete_flags[iid] = [False, False]
+
+        self.tree.bind("<ButtonRelease-1>", self.on_checkbox_click)
+
+        if not self.duplicates:
+            messagebox.showinfo("No duplicates", "No duplicate files were found.")
+            return
 
         self.tree.bind("<ButtonRelease-1>", self.on_checkbox_click)
 
@@ -193,29 +299,47 @@ class DuplicateFinderApp:
             if tup[0] == f1 and tup[1] == f2:
                 date, size = tup[2], tup[3]
                 break
-        d1, d2 = ("✔" if self.delete_flags[iid][0] else ""), ("✔" if self.delete_flags[iid][1] else "")
+        d1, d2 = ("🗑️" if self.delete_flags[iid][0] else ""), ("🗑️" if self.delete_flags[iid][1] else "")
+
         self.tree.item(iid, values=(f1, f2, date, size, d1, d2))
 
     def apply_deletions(self):
+        deleted_count = 0
+        items_to_remove = []
+
         for iid, (del1, del2) in self.delete_flags.items():
             f1, f2 = iid.split("|")
-
             f1 = os.path.normpath(f1)
             f2 = os.path.normpath(f2)
 
             if del1 and os.path.exists(f1):
                 try:
                     send2trash(f1)
+                    deleted_count += 1
+                    # Mark this item for removal if either file was deleted
+                    items_to_remove.append(iid)
                 except Exception as e:
                     print(f"Error deleting {f1}: {e}")
             if del2 and os.path.exists(f2):
                 try:
                     send2trash(f2)
+                    deleted_count += 1
+                    # Mark this item for removal if either file was deleted
+                    items_to_remove.append(iid)
                 except Exception as e:
                     print(f"Error deleting {f2}: {e}")
 
-        messagebox.showinfo("Done", "Selected files were moved to the Recycle Bin.")
-        self.batch_mode()  # Refresh
+        # Remove the rows for deleted items
+        for iid in set(items_to_remove):  # Use set to avoid duplicates
+            if iid in self.delete_flags:
+                del self.delete_flags[iid]
+            self.tree.delete(iid)
+
+            # Also remove from duplicates list
+            self.duplicates = [dup for dup in self.duplicates
+                               if not (dup[0] == iid.split("|")[0] and dup[1] == iid.split("|")[1])]
+
+        messagebox.showinfo("Done", f"{deleted_count} files were moved to the Recycle Bin.")
 
     def update_preview(self, event):
         selected = self.tree.selection()
