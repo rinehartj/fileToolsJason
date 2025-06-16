@@ -1,132 +1,80 @@
 import os
 import re
 import shutil
-from typing import Dict, List, Tuple
 
-# Regular expression to match GUIDs in filenames (preceded by a space)
-GUID_PATTERN = re.compile(r' ([a-f0-9]{32})(?=\.[^.]+|$)')
-# Regular expression to match GUIDs in markdown paths (with %20 before)
-MD_GUID_PATTERN = re.compile(r'%20([a-f0-9]{32})')
+# GUID pattern: space + 32 hex characters
+GUID_REGEX = re.compile(r'(?: ?)([a-fA-F0-9]{32})')
 
+# To track seen names and avoid conflicts
+name_map = {}
+used_names = set()
 
-def remove_guids_in_directory(root_dir: str):
-    # First pass: collect all GUIDs and their new names
-    guid_map: Dict[str, List[Tuple[str, str]]] = {}
+def strip_guid(name):
+    """Remove GUID (preceded by a space) from the name"""
+    return GUID_REGEX.sub('', name).strip()
 
-    # Walk through the directory to collect all GUIDs
+def unique_name(name, is_file=False, extension=''):
+    """Return a unique name to avoid collisions"""
+    base = name
+    i = 1
+    candidate = name
+    while candidate + extension in used_names:
+        candidate = f"{base}_{i}"
+        i += 1
+    used_names.add(candidate + extension)
+    return candidate + extension
+
+def rename_files_and_folders(root_dir):
+    # Walk from the deepest folders up (bottom-up=True)
     for dirpath, dirnames, filenames in os.walk(root_dir, topdown=False):
-        # Process files first
+        # Process files
         for filename in filenames:
-            process_guid_in_name(filename, guid_map, dirpath, is_file=True)
-
-        # Then process directories
-        for dirname in dirnames:
-            process_guid_in_name(dirname, guid_map, dirpath, is_file=False)
-
-    # Second pass: rename files and folders
-    rename_files_and_folders(root_dir, guid_map)
-
-    # Third pass: process markdown files
-    process_markdown_files(root_dir)
-
-
-def process_guid_in_name(name: str, guid_map: Dict[str, List[Tuple[str, str]]], dirpath: str, is_file: bool):
-    match = GUID_PATTERN.search(name)
-    if not match:
-        return
-
-    guid = match.group(1)
-    new_name = GUID_PATTERN.sub('', name)
-
-    if guid not in guid_map:
-        guid_map[guid] = []
-
-    full_path = os.path.join(dirpath, name)
-    guid_map[guid].append((full_path, new_name, is_file))
-
-
-def rename_files_and_folders(root_dir: str, guid_map: Dict[str, List[Tuple[str, str]]]):
-    # Process GUIDs that appear multiple times first
-    for guid, entries in guid_map.items():
-        if len(entries) > 1:
-            # These need to be renamed with numbers to avoid collisions
-            for i, (old_path, new_name, is_file) in enumerate(entries, 1):
-                dirname = os.path.dirname(old_path)
-                base, ext = os.path.splitext(new_name) if is_file else (new_name, '')
-
-                # Try the name without number first
-                if i == 1:
-                    candidate = new_name
-                else:
-                    candidate = f"{base} {i}{ext}" if is_file else f"{new_name} {i}"
-
-                # Ensure the new name doesn't collide with existing files
-                counter = i
-                while True:
-                    new_path = os.path.join(dirname, candidate)
-                    if not os.path.exists(new_path) or new_path == old_path:
-                        break
-                    counter += 1
-                    candidate = f"{base} {counter}{ext}" if is_file else f"{new_name} {counter}"
-
-                # Perform the rename
-                if old_path != new_path:
-                    os.rename(old_path, new_path)
-        else:
-            # Single occurrence - just remove the GUID
-            old_path, new_name, is_file = entries[0]
-            dirname = os.path.dirname(old_path)
-            new_path = os.path.join(dirname, new_name)
-
-            # Check for name collisions
-            if os.path.exists(new_path) and new_path != old_path:
-                base, ext = os.path.splitext(new_name) if is_file else (new_name, '')
-                counter = 1
-                while True:
-                    candidate = f"{base} {counter}{ext}" if is_file else f"{new_name} {counter}"
-                    candidate_path = os.path.join(dirname, candidate)
-                    if not os.path.exists(candidate_path):
-                        break
-                    counter += 1
-                new_path = candidate_path
-
-            if old_path != new_path:
+            old_path = os.path.join(dirpath, filename)
+            base, ext = os.path.splitext(filename)
+            clean_base = strip_guid(base)
+            if base != clean_base:
+                new_name = name_map.get(clean_base, unique_name(clean_base, is_file=True, extension=ext))
+                name_map[base] = new_name
+                new_path = os.path.join(dirpath, new_name)
+                print(f"Renaming file: {old_path} -> {new_path}")
                 os.rename(old_path, new_path)
 
+        # Process directories
+        for dirname in dirnames:
+            old_path = os.path.join(dirpath, dirname)
+            clean_name = strip_guid(dirname)
+            if dirname != clean_name:
+                new_name = name_map.get(clean_name, unique_name(clean_name))
+                name_map[dirname] = new_name
+                new_path = os.path.join(dirpath, new_name)
+                print(f"Renaming folder: {old_path} -> {new_path}")
+                os.rename(old_path, new_path)
 
-def process_markdown_files(root_dir: str):
+def fix_markdown_links(root_dir):
     for dirpath, _, filenames in os.walk(root_dir):
         for filename in filenames:
-            if filename.lower().endswith('.md'):
-                filepath = os.path.join(dirpath, filename)
-                process_guid_in_markdown(filepath)
+            if filename.endswith('.md'):
+                file_path = os.path.join(dirpath, filename)
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
 
+                # Replace %20 + GUID patterns
+                updated_content = re.sub(r'%20[a-fA-F0-9]{32}', '', content)
+                # Also catch plain space + GUID if they somehow got encoded incorrectly
+                updated_content = re.sub(r' ?[a-fA-F0-9]{32}', '', updated_content)
 
-def process_guid_in_markdown(filepath: str):
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
+                if content != updated_content:
+                    print(f"Fixing markdown links in: {file_path}")
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(updated_content)
 
-        new_content = MD_GUID_PATTERN.sub('', content)
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description="Remove GUIDs from filenames and markdown links.")
+    parser.add_argument("directory", help="Root directory to process")
+    args = parser.parse_args()
 
-        if new_content != content:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-    except (IOError, UnicodeDecodeError) as e:
-        print(f"Error processing {filepath}: {str(e)}")
-
-
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) != 2:
-        print("Usage: python remove_guids.py <directory>")
-        sys.exit(1)
-
-    directory = sys.argv[1]
-    if not os.path.isdir(directory):
-        print(f"Error: {directory} is not a valid directory")
-        sys.exit(1)
-
-    remove_guids_in_directory(directory)
-    print("GUID removal completed.")
+    root = os.path.abspath(args.directory)
+    rename_files_and_folders(root)
+    fix_markdown_links(root)
+    print("Processing complete.")
