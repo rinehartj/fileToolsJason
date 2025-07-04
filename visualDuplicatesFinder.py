@@ -115,16 +115,15 @@ class DuplicateFinderApp:
 
         self.tree.bind("<<TreeviewSelect>>", self.update_preview)
 
-        # Select All Checkboxes
+        # Select All Checkboxes - replaced with buttons
         bottom = tk.Frame(self.root)
         bottom.grid(row=3, column=0, sticky="ew")
-        self.select_all1 = tk.IntVar()
-        self.select_all2 = tk.IntVar()
 
-        tk.Checkbutton(bottom, text="Select All Delete from Folder1", variable=self.select_all1,
-                       command=self.toggle_all1).pack(side=tk.LEFT)
-        tk.Checkbutton(bottom, text="Select All Delete from Folder2", variable=self.select_all2,
-                       command=self.toggle_all2).pack(side=tk.LEFT)
+        tk.Button(bottom, text="Select All Folder1", command=self.select_all_folder1).pack(side=tk.LEFT)
+        tk.Button(bottom, text="Select All Folder2", command=self.select_all_folder2).pack(side=tk.LEFT)
+        tk.Button(bottom, text="Deselect All Folder1", command=self.deselect_all_folder1).pack(side=tk.LEFT)
+        tk.Button(bottom, text="Deselect All Folder2", command=self.deselect_all_folder2).pack(side=tk.LEFT)
+
         tk.Button(bottom, text="Apply Deletions", command=self.apply_deletions).pack(side=tk.RIGHT)
 
         self.folder1 = None
@@ -139,6 +138,26 @@ class DuplicateFinderApp:
     def select_folder2(self):
         self.folder2 = filedialog.askdirectory()
         self.folder2_label.config(text=f"Folder2: {self.folder2}")
+
+    def select_all_folder1(self):
+        for iid in self.delete_flags:
+            self.delete_flags[iid][0] = True
+            self.refresh_tree_item(iid)
+
+    def select_all_folder2(self):
+        for iid in self.delete_flags:
+            self.delete_flags[iid][1] = True
+            self.refresh_tree_item(iid)
+
+    def deselect_all_folder1(self):
+        for iid in self.delete_flags:
+            self.delete_flags[iid][0] = False
+            self.refresh_tree_item(iid)
+
+    def deselect_all_folder2(self):
+        for iid in self.delete_flags:
+            self.delete_flags[iid][1] = False
+            self.refresh_tree_item(iid)
 
     def batch_mode(self):
         if self.search_mode.get() == "two_folders":
